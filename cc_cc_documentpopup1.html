@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Documents</title>
+    <meta charset="utf-8" />
+
+    <!-- SortableJS -->
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+
+    <style>
+        body {
+            font-family: Arial;
+            padding: 15px;
+        }
+
+        .item {
+            padding: 10px;
+            margin-bottom: 8px;
+            border: 1px solid #ddd;
+            background: #f9f9f9;
+            cursor: grab;
+        }
+
+        .item:active { cursor: grabbing; }
+
+        a { color: #0078d4; text-decoration: none; }
+
+        button {
+            margin-right: 10px;
+            padding: 6px 12px;
+        }
+
+        #responseModal {
+            display: none;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-top: 15px;
+            background: #fff;
+        }
+
+        /* ✅ FULL PAGE BLOCKING OVERLAY */
+        #overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.7);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+        }
+
+        .overlay-content {
+            text-align: center;
+            font-size: 14px;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #ddd;
+            border-top: 4px solid #0078d4;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+
+<body>
+
+<h3>Selected Documents</h3>
+
+<div id="list"></div>
+
+<br/>
+
+<button id="bundleBtn">Bundle</button>
+<button id="cancelBtn">Cancel</button>
+
+<div id="responseModal">
+    <h4>Flow Response</h4>
+    <pre id="responseContent"></pre>
+    <button onclick="closeResponse()">Close</button>
+</div>
+
+<!-- ✅ BLOCKING SPINNER -->
+<div id="overlay">
+    <div class="overlay-content">
+        <div class="spinner"></div>
+        <div>Processing...</div>
+    </div>
+</div>
+
+<script>
+
+let FLOW_URL = "";
+let items = [];
+let msalInstance = null;
+
+// =======================
+// 🌍 ENV VARIABLES
+// =======================
+async function getEnv(name) {
+    const query = "?$filter=schemaname eq '" + name + "'" +
+                  "&$select=defaultvalue" +
+                  "&$expand=environmentvariabledefinition_environmentvariablevalue($select=value)";
+
+    const result = await parent.Xrm.WebApi.retrieveMultipleRecords(
+        "environmentvariabledefinition",
+        query
+    );
+
+    if (!result.entities.length) {
+        throw new Error("Env var not found: " + name);
+    }
+
+    const env = result.entities[0];
+
+    return env.environmentvariabledefinition_environmentvariablevalue?.[0]?.value
+        || env.defaultvalue;
+}
+
+// =======================
+// 📦 GET DATA
+// =======================
+function getData() {
+    const params = new URLSearchParams(window.location.search);
+    const data = params.get("data");
+
+    if (!data) return [];
+
+    try {
+        return JSON.parse(data);
+    } catch {
+        return [];
+    }
+}
+
+// =======================
+// 🎨 RENDER LIST
+// =======================
+function renderList() {
+    items = getData().filter(x => x && x.id);
+
+    const container = document.getElementById("list");
+    container.innerHTML = "";
+
+    if (!items.length) {
+        container.innerHTML = "<p>No selected documents.</p>";
+        return;
+    }
+
+    items.forEach(function (item) {
+        const div = document.createElement("div");
+        div.className = "item";
+        div.setAttribute("data-id", item.id);
+
+        div.innerHTML = `
+            <strong>${item.name}</strong><br/>
+            <a href="${item.absoluteurl}" target="_blank">Open</a>
+        `;
+
+        container.appendChild(div);
+    });
+
+    enableSorting();
+}
+
+// =======================
+// 🔄 SORTING
+// =======================
+function enableSorting() {
+    new Sortable(document.getElementById("list"), {
+        animation: 150,
+        onEnd: function () {
+            const newOrder = [];
+
+            document.querySelectorAll(".item").forEach(el => {
+                const id = el.getAttribute("data-id");
+                const found = items.find(x => x.id === id);
+                if (found) newOrder.push(found);
+            });
+
+            items = newOrder;
+        }
+    });
+}
+
+// =======================
+// 🔐 LOAD MSAL
+// =======================
+async function loadMsal() {
+    if (!window.msal) {
+        await new Promise(resolve => {
+            const script = document.createElement("script");
+            script.src = "https://alcdn.msauth.net/browser/2.38.1/js/msal-browser.min.js";
+            script.onload = resolve;
+            document.head.appendChild(script);
+        });
+    }
+}
+
+// =======================
+// 🔐 GET TOKEN
+// =======================
+async function getToken() {
+
+    await loadMsal();
+
+    if (!msalInstance) {
+        const clientId = await getEnv("cc_ClientId");
+        const tenantId = await getEnv("cc_TenantId");
+
+        msalInstance = new msal.PublicClientApplication({
+            auth: {
+                clientId: clientId,
+                authority: "https://login.microsoftonline.com/" + tenantId,
+                redirectUri: window.location.origin
+            }
+        });
+    }
+
+    let account = msalInstance.getAllAccounts()[0];
+
+    if (!account) {
+        const loginResponse = await msalInstance.loginPopup({
+            scopes: ["User.Read"]
+        });
+        account = loginResponse.account;
+    }
+
+    let tokenResponse;
+
+    try {
+        tokenResponse = await msalInstance.acquireTokenSilent({
+            scopes: ["https://service.flow.microsoft.com//.default"],
+            account: account
+        });
+    } catch {
+        tokenResponse = await msalInstance.acquireTokenPopup({
+            scopes: ["https://service.flow.microsoft.com//.default"]
+        });
+    }
+
+    return tokenResponse.accessToken;
+}
+
+// =======================
+// 📦 CALL FLOW
+// =======================
+async function callFlow() {
+    try {
+        showLoading(true);
+
+        document.getElementById("bundleBtn").disabled = true;
+        document.getElementById("cancelBtn").disabled = true;
+
+        if (!FLOW_URL) {
+            FLOW_URL = await getEnv("cc_flow_url");
+        }
+
+        const token = await getToken();
+
+        const response = await fetch(FLOW_URL, {
+            method: "POST",
+            headers: {
+                "Authorization": "Bearer " + token,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ documents: items })
+        });
+
+        const result = await response.json();
+
+        showResponse(result);
+
+    } catch (e) {
+        console.error(e);
+        showResponse({ error: e.message });
+    } finally {
+        showLoading(false);
+
+        document.getElementById("bundleBtn").disabled = false;
+        document.getElementById("cancelBtn").disabled = false;
+    }
+}
+
+// =======================
+// UI HELPERS
+// =======================
+function showLoading(show) {
+    document.getElementById("overlay").style.display = show ? "flex" : "none";
+}
+
+function showResponse(data) {
+    document.getElementById("responseContent").innerText =
+        JSON.stringify(data, null, 2);
+
+    document.getElementById("responseModal").style.display = "block";
+}
+
+function closeResponse() {
+    document.getElementById("responseModal").style.display = "none";
+}
+
+function closeDialog() {
+    if (window.parent && window.parent.Xrm) {
+        window.parent.Xrm.Navigation.closeDialog();
+    } else {
+        window.close();
+    }
+}
+
+// =======================
+// INIT
+// =======================
+document.addEventListener("DOMContentLoaded", function () {
+    renderList();
+
+    document.getElementById("bundleBtn").onclick = callFlow;
+    document.getElementById("cancelBtn").onclick = closeDialog;
+});
+
+</script>
+
+</body>
+</html>
