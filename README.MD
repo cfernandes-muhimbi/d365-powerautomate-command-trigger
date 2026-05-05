@@ -262,8 +262,6 @@ The array is **ordered** — it reflects the sequence the user set in the drag-t
 4. Process the documents (merge, store, notify, etc.).
 5. Return a JSON response body — the popup will display this to the user.
 
-> **Security note:** Store your API key securely in Dataverse or as an environment variable rather than hardcoding it in the flow.
-
 ---
 
 ## Configure the Command Ribbon
