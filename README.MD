@@ -8,7 +8,7 @@ A JavaScript library for triggering Power Automate flows directly from Dynamics 
 
 ## Preview
 
-> 📹 *(Video walkthrough coming soon)*
+[![Watch the video](https://img.youtube.com/vi/TdOqRxQkJNE/maxresdefault.jpg)](https://youtu.be/TdOqRxQkJNE)
 
 ---
 
